@@ -66,6 +66,7 @@ jobs:
           echo "API=${{ github.event.inputs.android_api || '30' }}" >> $GITHUB_ENV
           echo "SYSROOT=$GITHUB_WORKSPACE/sysroot" >> $GITHUB_ENV
           echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
           echo "CC=$TOOLCHAIN/${target}$API-clang" >> $GITHUB_ENV
           echo "AR=$TOOLCHAIN/llvm-ar" >> $GITHUB_ENV
           echo "RANLIB=$TOOLCHAIN/llvm-ranlib" >> $GITHUB_ENV
@@ -79,7 +80,7 @@ jobs:
           cd libmnl
           git checkout libmnl-1.0.5
           ./autogen.sh
-          ./configure --host=$TARGET --enable-static --disable-shared --prefix=/usr/local
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --prefix=/usr/local
           make -j$(nproc)
           make install DESTDIR=$SYSROOT
 
@@ -89,7 +90,7 @@ jobs:
           cd libnftnl
           git checkout libnftnl-1.2.9
           ./autogen.sh
-          ./configure --host=$TARGET --enable-static --disable-shared --prefix=/usr/local
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --prefix=/usr/local
           make -j$(nproc)
           make install DESTDIR=$SYSROOT
 
@@ -97,7 +98,7 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           cd gmp-6.3.0
-          ./configure --host=$TARGET --enable-static --disable-shared --prefix=/usr/local CFLAGS="--static -fPIC" LDFLAGS="--static"
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --prefix=/usr/local CFLAGS="--static -fPIC" LDFLAGS="--static"
           make -j$(nproc)
           make install DESTDIR=$SYSROOT
 
@@ -107,7 +108,7 @@ jobs:
           cd nftables
           git checkout v1.1.3
           ./autogen.sh
-          ./configure --host=$TARGET --enable-static --disable-shared --with-cli=no --prefix=/usr/local
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --with-cli=no --prefix=/usr/local
           make -j$(nproc)
           make install DESTDIR=$SYSROOT
           find $SYSROOT -type f \( -executable -o -name "*.a" \) -exec $TOOLCHAIN/llvm-strip --strip-all {} \;
