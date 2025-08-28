@@ -1,0 +1,146 @@
+name: Android Static Build nftables New
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_arch:
+        description: 'Target architecture (aarch64/arm/x86_64/i686)'
+        required: false
+        default: 'aarch64'
+      ndk_version:
+        description: 'Android NDK version'
+        required: false
+        default: 'r27c'
+      android_api:
+        description: 'Android API level'
+        required: false
+        default: '30'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ github.event.inputs.ndk_version || 'r27c' }}
+
+      - name: Verify NDK installation
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls -l $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin || echo "NDK toolchain directory not found"
+
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ github.workspace }}/sysroot
+            ${{ github.workspace }}/gmp-6.3.0
+            ${{ github.workspace }}/libmnl
+            ${{ github.workspace }}/libnftnl
+          key: ${{ runner.os }}-ndk-${{ github.event.inputs.ndk_version || 'r27c' }}-${{ github.event.inputs.target_arch || 'aarch64' }}-${{ github.event.inputs.android_api || '30' }}-${{ hashFiles('**/configure.ac', '**/Makefile.am') }}
+
+      - name: Install build tools
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git asciidoc automake autoconf libtool libltdl-dev pkg-config gcc perl flex bison libgmp-dev libreadline-dev build-essential
+
+      - name: Prepare source code
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          git clone https://git.netfilter.org/libmnl
+          git clone https://git.netfilter.org/libnftnl
+          [ ! -f gmp-6.3.0.tar.xz ] && wget https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
+          tar -xf gmp-6.3.0.tar.xz
+
+      - name: Setup toolchain
+        run: |
+          case "${{ github.event.inputs.target_arch || 'aarch64' }}" in
+            aarch64) target="aarch64-linux-android" ;;
+            arm) target="armv7a-linux-androideabi" ;;
+            x86_64) target="x86_64-linux-android" ;;
+            i686) target="i686-linux-android" ;;
+            *) echo "Unsupported architecture"; exit 1 ;;
+          esac
+          
+          echo "TARGET=$target" >> $GITHUB_ENV
+          echo "API=${{ github.event.inputs.android_api || '30' }}" >> $GITHUB_ENV
+          echo "SYSROOT=$GITHUB_WORKSPACE/sysroot" >> $GITHUB_ENV
+          echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          echo "CC=$TOOLCHAIN/${target}${API}-clang" >> $GITHUB_ENV
+          echo "AR=$TOOLCHAIN/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TOOLCHAIN/llvm-ranlib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$SYSROOT/usr/local/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CFLAGS=-I$SYSROOT/usr/local/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$SYSROOT/usr/local/lib -static" >> $GITHUB_ENV
+
+      - name: Debug toolchain and environment
+        run: |
+          echo "CC=$CC"
+          echo "TOOLCHAIN=$TOOLCHAIN"
+          echo "SYSROOT=$SYSROOT"
+          echo "CFLAGS=$CFLAGS"
+          echo "LDFLAGS=$LDFLAGS"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          ls -l $TOOLCHAIN || echo "Toolchain directory not found"
+          $CC --version || echo "Compiler not found or not working"
+          test -d $SYSROOT || echo "Sysroot directory missing"
+
+      - name: Build libmnl
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          cd libmnl
+          git checkout libmnl-1.0.5
+          ./autogen.sh
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --prefix=/usr/local
+          echo "Running minimal test compile"
+          $CC -c src/mnl.c -o src/mnl.o || echo "Test compile failed"
+          make -j$(nproc)
+          make install DESTDIR=$SYSROOT
+
+      - name: Upload config.log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-log
+          path: ${{ github.workspace }}/libmnl/config.log
+
+      - name: Build libnftnl
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          cd libnftnl
+          git checkout libnftnl-1.2.9
+          ./autogen.sh
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --prefix=/usr/local
+          make -j$(nproc)
+          make install DESTDIR=$SYSROOT
+
+      - name: Build GMP
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          cd gmp-6.3.0
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --prefix=/usr/local CFLAGS="--static -fPIC" LDFLAGS="--static"
+          make -j$(nproc)
+          make install DESTDIR=$SYSROOT
+
+      - name: Build nftables
+        run: |
+          git clone https://git.netfilter.org/nftables
+          cd nftables
+          git checkout v1.1.3
+          ./autogen.sh
+          ./configure --host=$TARGET CC="$CC" --enable-static --disable-shared --with-cli=no --prefix=/usr/local
+          make -j$(nproc)
+          make install DESTDIR=$SYSROOT
+          find $SYSROOT -type f \( -executable -o -name "*.a" \) -exec $TOOLCHAIN/llvm-strip --strip-all {} \;
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ github.event.inputs.target_arch || 'aarch64' }}-nft-static
+          path: ${{ env.SYSROOT }}/usr/local/ 
