@@ -1,4 +1,4 @@
-name: Android Static Build nftables New
+name: Android Static Build nftables
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Android NDK
-        uses: nttld/setup-ndk@v1
+        uses: nttld/setup-ndk@v1.3.0 # Pin to a specific version for reliability
         with:
           ndk-version: ${{ github.event.inputs.ndk_version || 'r27c' }}
 
@@ -73,6 +73,7 @@ jobs:
           echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
           echo "CC=$TOOLCHAIN/${target}${API}-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/${target}${API}-clang++" >> $GITHUB_ENV
           echo "AR=$TOOLCHAIN/llvm-ar" >> $GITHUB_ENV
           echo "RANLIB=$TOOLCHAIN/llvm-ranlib" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=$SYSROOT/usr/local/lib/pkgconfig" >> $GITHUB_ENV
@@ -82,14 +83,15 @@ jobs:
       - name: Debug toolchain and environment
         run: |
           echo "CC=$CC"
+          echo "CXX=$CXX"
           echo "TOOLCHAIN=$TOOLCHAIN"
           echo "SYSROOT=$SYSROOT"
           echo "CFLAGS=$CFLAGS"
           echo "LDFLAGS=$LDFLAGS"
           echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
           ls -l $TOOLCHAIN || echo "Toolchain directory not found"
-          $CC --version || echo "Compiler not found or not working"
-          test -d $SYSROOT || echo "Sysroot directory missing"
+          test -f "$CC" && $CC --version || echo "Compiler not found at $CC"
+          test -d "$SYSROOT" || echo "Sysroot directory missing"
 
       - name: Build libmnl
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -143,4 +145,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-${{ github.event.inputs.target_arch || 'aarch64' }}-nft-static
-          path: ${{ env.SYSROOT }}/usr/local/ 
+          path: ${{ env.SYSROOT }}/usr/local/
